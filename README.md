@@ -1,7 +1,26 @@
 # Tracking Backend Demo
 
-A simple AppEngine/Flask for storing user event data inn BigQuery.
+A demonstration AppEngine/Flask app that handles the storage user event data in 
+BigQuery.
 
+## Start a Local Server
+```bash
+source venv/bin/activate
+python main.py
+```
+
+## Initialise Dataset
+A GET request to the /init endpoint will generate the following items in **the 
+currently selected project**:
+* a dataset 'bobs_knob_shops', with
+* two tables: 'events_0' and 'events_1'
+
+## Insert an Event
+```bash
+curl -X POST -i http://localhost:8080/events \
+    -H "Content-Type: application/json" \
+    --data "$(cat example.json)"
+```
 
 ## License
 Copyright 2019 Hayo van Loon
