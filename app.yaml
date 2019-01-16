@@ -1,1 +1,6 @@
 runtime: python37
+
+handlers:
+- url: /.*
+  script: main.app
+  login: admin
