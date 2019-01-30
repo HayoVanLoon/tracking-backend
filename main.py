@@ -267,7 +267,7 @@ def aggregate():
     # truncate old table
     previous = DAILIES[(days_since_epoch() + 1) % 2]
     client.delete_table(previous)
-    client.query(CREATE_EVENTS_QUERY.format(for_query(previous)))
+    client.query(CREATE_EVENTS_QUERY.format(for_query(previous)), job_id_prefix='create-table')
     return 'OK'
 
 
