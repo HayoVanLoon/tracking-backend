@@ -1,7 +1,7 @@
 tmp/**
 bin/**
 
-venv/**
+venv
 
 target/**
 .gradle/**

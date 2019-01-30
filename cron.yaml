@@ -1,0 +1,7 @@
+# AppEngine Cron
+#
+# Warning: will overwrite existing cron tabs in the project
+
+- url: /events/aggregation
+  description: Runs the daily aggregation flow
+  schedule: every day 2:00

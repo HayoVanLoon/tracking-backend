@@ -1,7 +1,7 @@
 {
   "channel_id": "bobs-door-knobs",
-  "visitor_id": "1234",
-  "session_id": "56789",
+  "visitor_id": "visitor1",
+  "session_id": "visitor1-123",
   "timestamp": "1544896138528",
   "timezone_offset": -60,
   "url": "https://door.knobsfrombobs.za/product/123456-78",
