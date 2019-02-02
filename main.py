@@ -11,18 +11,41 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import hashlib
 import os
-import random
-from datetime import datetime, timedelta, timezone
+from datetime import timezone
 from functools import wraps
 from typing import Union
 
-import requests
-from flask import Flask, redirect, request, session
+from flask import Flask, Response, make_response, redirect, request, session
 from google.cloud import bigquery as bq
 
 import auth
+import demo
+from utils import days_since_epoch
+
+"""
+This App requires quite a few environment parameters to operate. 
+
+GOOGLE_CLOUD_PROJECT: 
+The Google cloud project id (required) 
+
+DEBUG_AUTH:
+A flag indicating whether to use a full OAuth2 authentication flow on a local 
+development server as well. Useful when testing OAuth2; set to non-false-y value 
+to activate.
+
+APPENGINE_CLIENT_ID: 
+The app engine id which generated from https://console.cloud.google.com/apis/credentials
+Only required when authentication is active.
+
+APPENGINE_CLIENT_SECRET:
+The secret generated along with the id. Never store it in a public location 
+(like a repository). Only required when authentication is active.
+
+APPENGINE_USERS:
+A comma-separated list of email addresses. Only required when authentication is
+active, otherwise 'test@example.com' will be used.
+"""
 
 PROJECT = os.getenv('GOOGLE_CLOUD_PROJECT')
 
@@ -37,6 +60,10 @@ DAILIES = [bq.TableReference(DATASET, 'events_0'),
 SESSIONS = bq.TableReference(DATASET, 'sessions')
 
 TZ = timezone.utc
+
+USERS = os.getenv('APPENGINE_USERS', '').split(',')
+if not USERS and not os.getenv('DEBUG_AUTH'):
+    USERS = ['test@example.com']
 
 
 def for_query(x: Union[str, bq.DatasetReference, bq.TableReference]) -> str:
@@ -53,12 +80,11 @@ def for_query(x: Union[str, bq.DatasetReference, bq.TableReference]) -> str:
 # noinspection SqlNoDataSourceInspection,SqlDialectInspection
 AGGREGATION_QUERY = """
 INSERT INTO `{}` (
-  channel_id, visitor_id, session_id, timezone_offset, start_time, end_time, hit_count, hits
+  channel_id, visitor_id, timezone_offset, start_time, end_time, hit_count, hits
 )
 SELECT
   channel_id,
   visitor_id,
-  session_id,
   MAX(timezone_offset) timezone_offset,
   MIN(timestamp) start_time,
   MAX(timestamp) end_time,
@@ -71,27 +97,25 @@ SELECT
 FROM (
   SELECT
     *,
-    MAX(timestamp) OVER (PARTITION BY session_id) last_timestamp
+    MAX(timestamp) OVER (PARTITION BY visitor_id) last_timestamp
   FROM
     `{}.events_*` )
 WHERE
   last_timestamp <= TIMESTAMP(CURRENT_DATE())
 GROUP BY
   channel_id,
-  visitor_id,
-  session_id
+  visitor_id
 """.format(for_query(SESSIONS), for_query(DATASET))
 
 # noinspection SqlNoDataSourceInspection,SqlDialectInspection
 LEFTOVER_QUERY = """
 INSERT INTO `{}` (
-  channel_id, visitor_id, session_id, timestamp, timezone_offset,
+  channel_id, visitor_id, timestamp, timezone_offset,
   url, referrer_url
 )
 SELECT
   channel_id,
   visitor_id,
-  session_id,
   timestamp,
   timezone_offset,
   url,
@@ -99,12 +123,11 @@ SELECT
 FROM (
   SELECT
     *,
-    MIN(timestamp) OVER (PARTITION BY session_id) first_timestamp,
-    MAX(timestamp) OVER (PARTITION BY session_id) last_timestamp
+    MAX(timestamp) OVER (PARTITION BY visitor_id) last_timestamp
   FROM
     `{}.events_*` )
 WHERE
-  first_timestamp < TIMESTAMP(CURRENT_DATE())
+  timestamp < TIMESTAMP(CURRENT_DATE())
   AND last_timestamp >= TIMESTAMP(CURRENT_DATE())
 """
 
@@ -113,7 +136,6 @@ CREATE_SESSIONS_QUERY = """
 CREATE TABLE `{}` (
   channel_id STRING,
   visitor_id STRING,
-  session_id STRING,
   timezone_offset INT64,
   start_time TIMESTAMP,
   end_time TIMESTAMP,
@@ -135,7 +157,6 @@ CREATE_EVENTS_QUERY = """
 CREATE TABLE `{}` ( 
   channel_id STRING,
   visitor_id STRING,
-  session_id STRING,
   timestamp TIMESTAMP,
   timezone_offset INT64,
   url STRING,
@@ -144,23 +165,21 @@ CREATE TABLE `{}` (
 """
 
 
-def days_since_epoch(dt: datetime = None):
-    if not dt:
-        dt = datetime.now(tz=TZ)
-    return (dt - datetime(1970, 1, 1, tzinfo=TZ)).days
+def require_oauth2(view_func):
+    """
+    Decorator enforcing restricted access.
+    """
 
-
-def custom_oauth2(view_func):
     @wraps(view_func)
     def decorated_view():
-        if 'token' in session:
-            token, _ = auth.verify_token(session['token'])
+        _, decoded = auth.from_request(request)
+        if decoded:
+            if decoded['email'] in USERS:
+                return view_func()
+            else:
+                return Response('Forbidden', status=403)
         else:
-            token = auth.from_auth_header(request)
-
-        if not token:
-            return redirect('/auth/login?next=/')
-        return view_func()
+            return redirect(f'/auth/login?next={request.url}')
 
     return decorated_view
 
@@ -174,9 +193,10 @@ def root():
 
 
 @app.route('/init')
+@require_oauth2
 def init():
     """
-    Sets up the necessary tables. Intended as convenience for demo.
+    Sets up the necessary tables for convenience.
     """
     client.create_dataset(DATASET)
     client.query(CREATE_SESSIONS_QUERY)
@@ -186,72 +206,57 @@ def init():
 
 
 @app.route('/demo_init')
+@require_oauth2
 def demo_init():
     """
     Sets up the necessary tables and adds some random rows.
     """
-
-    def random_insert(start, length, prefix='visitor'):
-        visitor_id = prefix + '-' + str(random.randint(0, 9999))
-        session_id = visitor_id + str(random.randint(0, 30))
-
-        def create_row(time):
-            return {
-                'channel_id': 'bobs-door-knobs',
-                'visitor_id': visitor_id,
-                'session_id': session_id,
-                'timestamp': time,
-                'timezone_offset': -60,
-                'url': f'https://door.knobsfrombobs.za/product/p{random.randint(10, 300)}',
-                'referrer_url': 'https://door.knobsfrombobs.za/lister/cellar'
-            }
-
-        rows = {}
-        for k in range(0, length):
-            ts = start.timestamp() + k * 1800
-            day = days_since_epoch(datetime.fromtimestamp(ts, tz=TZ)) % 2
-            xs = rows.get(day, [])
-            xs.append(create_row(ts))
-            rows[day] = xs
-
-        for day in rows:
-            table_ref = client.get_table(DAILIES[day])
-            client.insert_rows(table_ref, rows[day])
-
     init()
-
-    d = datetime.now(tz=TZ).date()
-    d1 = d - timedelta(days=1)
-
-    for i in range(0, 4):
-        random_insert(datetime(d1.year, d1.month, d1.day, 12, 0, i, tzinfo=TZ),
-                      5 + random.randint(0, 12))
-    random_insert(datetime(d1.year, d1.month, d1.day, 22, 0, tzinfo=TZ), 3, 'previous day')
-    random_insert(datetime(d1.year, d1.month, d1.day, 23, 0, tzinfo=TZ), 4, 'not closed')
-    for i in range(0, 4):
-        random_insert(datetime(d.year, d.month, d.day, 12, 0, i, tzinfo=TZ),
-                      5 + random.randint(0, 12))
-
+    demo.init_demo(client, DAILIES, TZ)
     return 'OK'
 
 
+@app.route('/auth/login')
+def login():
+    url = auth.handle_login(request, session)
+    return redirect(url)
+
+
+@app.route('/auth/redirect')
+def auth_redirect():
+    """
+    Endpoint for handling the oauth2 callback (as specified via
+    https://console.cloud.google.com/apis/credentials)
+    """
+    try:
+        next_path, id_token = auth.handle_redirect(request, session)
+    except ValueError:
+        return Response('Unauthorised', status=401)
+
+    resp = make_response(redirect(next_path))
+    resp.set_cookie(auth.ID_COOKIE, id_token)
+    return resp
+
+
 @app.route('/events', methods=['POST'])
+@require_oauth2
 def insert():
     """
     Inserts a new event into the current daily table.
     """
     row = request.json
-    try:
-        rows = [r for r in row]
-    except TypeError:
+    if type(row) == list:
+        rows = row
+    else:
         rows = [row]
 
-    t = client.get_table(DAILIES[days_since_epoch() % 2])
-    client.insert_rows(t, rows)
-    return 'OK'
+    table = client.get_table(DAILIES[days_since_epoch() % 2])
+    errors = client.insert_rows(table, rows)
+    return 'OK' if not errors else str(errors)
 
 
 @app.route('/events/aggregation', methods=['GET'])
+@require_oauth2
 def aggregate():
     """
     Handles daily aggregation flow.
@@ -271,39 +276,5 @@ def aggregate():
     return 'OK'
 
 
-@app.route('/test')
-@custom_oauth2
-def root():
-    """
-    OAth2 test implementation endpoint
-    """
-    return 'hic sunt dracones'
-
-
-@app.route('/auth/login')
-def login():
-    next_path = request.args.get('next', '/')
-    state = '%s$%s' % (hashlib.sha256(os.urandom(1024)).hexdigest(), next_path)
-    session['state'] = state
-    url = auth.create_auth_url(state)
-    return redirect(url)
-
-
-@app.route('/auth/redirect')
-def auth_redirect():
-    code = request.args.get('code')
-    state = request.args.get('state')
-
-    if state != session.get('state'):
-        raise Exception('bad state')
-
-    token_resp = requests.post(auth.TOKEN_ENDPOINT, auth.create_token_params(code))
-    id_token, decoded = auth.verify(token_resp.json())
-
-    session['token'] = id_token
-    next_path = session['state'].split('$')[1]
-    return redirect(next_path)
-
-
 if __name__ == '__main__':
-    app.run(host='127.0.0.1', port=8080, debug=True)
+    app.run(host='localhost', port=8080, debug=True)

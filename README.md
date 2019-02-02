@@ -3,8 +3,8 @@
 A demonstration AppEngine/Flask app that manages a user event data stream to 
 BigQuery.
 
-*Important: this app does not (yet) handle authentication and should not (yet) 
-be deployed to any production environment.*
+A bare-bones OAuth2 authentication flow has been implemented. See ```main.py``` 
+and ```auth.py``` for details and instructions.
 
 ## Set up the environment
 ```bash
@@ -15,7 +15,7 @@ pip install -r requirements.txt
 
 ## Start a local server
 ```bash
-export GOOGLE_CLOUD_PROJECT='your-project'
+export GOOGLE_CLOUD_PROJECT="your-project"
 
 source venv/bin/activate
 python main.py
@@ -48,8 +48,8 @@ curl http://localhost:8080/events/aggregation
 ```  
 
 ## Spawn a demo dataset
-You can spawn a demo with the ```/demo_init``` endpoint. This endpoint will 
-initialise the dataset and fill it with some data.
+You can spawn a demo dataset with the ```/demo_init``` endpoint. This endpoint 
+will initialise the dataset and fill it with some data.
 
 The data is selected so you can observe the logic of the aggregation job. 
 Initially there will be:
