@@ -51,6 +51,8 @@ TOKEN_INFO_ENDPOINT = 'https://www.googleapis.com/oauth2/v3/tokeninfo'
 
 AUTH_HEADERS = ['Authorization', 'HTTP_AUTHORIZATION']
 ID_COOKIE = 'CID'
+APPID_HEADER = "X-Appengine-Inbound-Appid"
+TASK_HEADER = "X-AppEngine-QueueName"
 
 CACHED_CERTS = None
 WARNED_FOR_FAKE_AUTH = False
@@ -136,9 +138,21 @@ def from_cookie(cookies):
     return verify_token(token)
 
 
+def get_app_or_task_header(headers):
+    for h in [APPID_HEADER, TASK_HEADER]:
+        if h in headers:
+            return headers[h]
+
+
 def from_request(req):
     if fake_auth():
         return {}, {'email': FAKE_USER}
+
+    # Trust AppEngine headers
+    app_or_task_header = get_app_or_task_header(req.headers)
+    if app_or_task_header:
+        return {}, {'sub': app_or_task_header}
+
     token, decoded = from_cookie(req.cookies)
     if not token:
         token, decoded = from_header(req.headers)
