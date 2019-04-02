@@ -3,6 +3,8 @@ bin/**
 
 venv
 
+.mypy_cache*
+
 target/**
 .gradle/**
 gradle/**
